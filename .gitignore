@@ -1,0 +1,38 @@
+# Dependencias y paquetes
+node_modules/
+jspm_packages/
+web_modules/
+
+# Carpetas de compilación y salida de producción
+dist/
+dist-ssr/
+build/
+out/
+.next/
+
+# Variables de entorno y secretos (¡CRÍTICO para proteger credenciales de Supabase/API!)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.env
+*.env.local
+
+# Archivos comprimidos y archivos pesados
+*.zip
+*.tar.gz
+*.rar
+cmms-react-app.zip
+
+# Carpetas de editores y sistemas operativos
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
