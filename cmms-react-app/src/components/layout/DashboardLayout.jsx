@@ -1,11 +1,32 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Outlet } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
 import { GlobalAlertSystem } from './GlobalAlertSystem';
 import { useOrdersStore } from '../../store/useOrdersStore';
+import { useAssetsStore } from '../../store/useAssetsStore';
+import { useInventoryStore } from '../../store/useInventoryStore';
+import { usePreventiveStore } from '../../store/usePreventiveStore';
+import { useAmefStore } from '../../store/useAmefStore';
+import { usePredictiveStore } from '../../store/usePredictiveStore';
 
 export function DashboardLayout() {
+  const fetchAssets = useAssetsStore(s => s.fetchAssets);
+  const fetchOrders = useOrdersStore(s => s.fetchOrders);
+  const fetchInventory = useInventoryStore(s => s.fetchInventory);
+  const fetchPlans = usePreventiveStore(s => s.fetchPlans);
+  const fetchAmefs = useAmefStore(s => s.fetchAmefs);
+  const fetchPredictive = usePredictiveStore(s => s.fetchPredictiveData);
+
+  useEffect(() => {
+    fetchAssets();
+    fetchOrders();
+    fetchInventory();
+    fetchPlans();
+    fetchAmefs();
+    fetchPredictive();
+  }, [fetchAssets, fetchOrders, fetchInventory, fetchPlans, fetchAmefs, fetchPredictive]);
+
   const hasUrgent = useOrdersStore(s => s.orders.some(o => o.priority === 'P1' && o.status !== 'cerrada'));
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
