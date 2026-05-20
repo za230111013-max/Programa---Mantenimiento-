@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import { usePreventiveStore } from '../../store/usePreventiveStore';
 import { useAssetsStore } from '../../store/useAssetsStore';
 import { useOrdersStore } from '../../store/useOrdersStore';
+import { useInventoryStore } from '../../store/useInventoryStore';
 import { useNavigate } from 'react-router-dom';
 import { 
   Calendar, 
@@ -36,9 +37,10 @@ import {
 
 export function PreventivePage() {
   const navigate = useNavigate();
-  const { plans, createPlan, executePlan } = usePreventiveStore();
+  const { plans, createPlan, executePlan, updatePlan } = usePreventiveStore();
   const createOrder = useOrdersStore(s => s.createOrder);
   const { assets } = useAssetsStore();
+  const { items: inventoryItems } = useInventoryStore();
   const [view, setView] = useState('list'); // 'list' | 'calendar' | 'gantt'
   const [currentDate, setCurrentDate] = useState(new Date());
   const [showNewModal, setShowNewModal] = useState(false);
@@ -49,20 +51,48 @@ export function PreventivePage() {
     intervalDays: '30',
     intervalHours: '500',
     estimatedHours: '2',
-    checklist: []
+    checklist: [],
+    requiredParts: []
   });
   const [newChecklistItem, setNewChecklistItem] = useState('');
+  const [selectedPartId, setSelectedPartId] = useState('');
+  const [selectedPartQty, setSelectedPartQty] = useState(1);
+  const [editingPlanParts, setEditingPlanParts] = useState(null);
+  const [editPartId, setEditPartId] = useState('');
+  const [editPartQty, setEditPartQty] = useState(1);
 
-  const handleExecute = (planId) => {
-    const plan = executePlan(planId);
+  const handleAddPart = () => {
+    if (selectedPartId && selectedPartQty > 0) {
+      const part = inventoryItems.find(p => p.id === selectedPartId);
+      if (part) {
+        setNewPlan({
+          ...newPlan,
+          requiredParts: [
+            ...(newPlan.requiredParts || []),
+            { id: part.id, name: part.name, qty: parseInt(selectedPartQty) }
+          ]
+        });
+        setSelectedPartId('');
+        setSelectedPartQty(1);
+      }
+    }
+  };
+
+  const handleExecute = async (planId) => {
+    const plan = plans.find(p => p.id === planId);
     if (plan) {
+      // Actualizar próxima fecha/horas en la BD
+      executePlan(planId);
+      
       // Crear la OT vinculada
       createOrder({
         title: `Mantenimiento Preventivo: ${plan.name}`,
-        description: `Rutina programada. Checklist: ${plan.checklist.join(', ')}`,
+        description: `Rutina programada. Checklist: ${plan.checklist?.join(', ') || 'Sin tareas'}`,
         assetTag: plan.assetId,
         priority: 'P2',
-        type: 'preventivo'
+        type: 'preventivo',
+        area: 'Mantenimiento',
+        checklist: plan.checklist?.map(task => ({ task, completed: false })) || []
       });
       navigate('/orders');
     }
@@ -125,8 +155,39 @@ export function PreventivePage() {
     return { firstDay, daysInMonth };
   };
 
-  const nextMonth = () => setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 1));
-  const prevMonth = () => setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1));
+  const nextMonth = () => {
+    setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 1));
+  };
+
+  const prevMonth = () => {
+    setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1));
+  };
+
+  const doesPlanFallOnDate = (plan, dateStr) => {
+    if (plan.type !== 'tiempo' || !plan.nextDueDate) return false;
+    
+    // Si la fecha coincide exactamente
+    if (plan.nextDueDate.startsWith(dateStr)) return true;
+
+    // Si tiene intervalos regulares, proyectar a futuro
+    if (!plan.intervalDays) return false;
+
+    const planDateParts = plan.nextDueDate.split('T')[0].split('-');
+    const planDate = new Date(planDateParts[0], planDateParts[1] - 1, planDateParts[2]);
+    
+    const checkDateParts = dateStr.split('-');
+    const checkDate = new Date(checkDateParts[0], checkDateParts[1] - 1, checkDateParts[2]);
+
+    // Solo proyectar mantenimientos hacia el futuro
+    if (checkDate <= planDate) return false;
+
+    // Calcular diferencia en días exactos
+    const diffTime = checkDate - planDate;
+    const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
+
+    // Si la diferencia es múltiplo exacto del intervalo, toca mantenimiento
+    return diffDays % plan.intervalDays === 0;
+  };
 
   const { firstDay, daysInMonth } = getDaysInMonth(currentDate);
   const calendarDays = Array.from({ length: 42 }, (_, i) => {
@@ -329,7 +390,13 @@ export function PreventivePage() {
 
                           <div className="space-y-4">
                              <div className="flex items-center gap-3">
-                                <div className="p-2 bg-white rounded-xl shadow-sm"><Package className="w-4 h-4 text-secondary-500" /></div>
+                                <button 
+                                  onClick={() => setEditingPlanParts({ planId: plan.id, parts: plan.requiredParts || [] })}
+                                  className="p-2 bg-white hover:bg-primary-50 hover:scale-105 active:scale-95 transition-all rounded-xl shadow-sm border border-gray-100 group/parts cursor-pointer"
+                                  title="Editar Refacciones"
+                                >
+                                  <Package className="w-4 h-4 text-secondary-500 group-hover/parts:text-primary-600 transition-colors" />
+                                </button>
                                 <div>
                                    <p className="text-[9px] font-black text-gray-400 uppercase tracking-tighter">Refacciones Necesarias</p>
                                    <div className="flex flex-wrap gap-1 mt-1">
@@ -379,7 +446,7 @@ export function PreventivePage() {
               <div className="grid grid-cols-7 flex-1">
                 {calendarDays.map((day, i) => {
                   const dateKey = day ? new Date(currentDate.getFullYear(), currentDate.getMonth(), day).toISOString().split('T')[0] : null;
-                  const dayPlans = plans.filter(p => p.type === 'tiempo' && p.nextDueDate.startsWith(dateKey));
+                  const dayPlans = dateKey ? plans.filter(p => doesPlanFallOnDate(p, dateKey)) : [];
 
                   return (
                     <div key={i} className={cn(
@@ -397,13 +464,29 @@ export function PreventivePage() {
                           <div className="mt-3 space-y-1.5 h-[100px] overflow-y-auto custom-scrollbar">
                             {dayPlans.map(p => {
                               const status = getPlanStatus(p);
+                              const asset = assets.find(a => a.tag === p.assetId);
                               return (
-                                <div key={p.id} className={cn(
-                                   "text-[9px] text-white font-black p-2 rounded-xl shadow-lg shadow-white/50 truncate flex items-center gap-2",
-                                   status === 'red' ? 'bg-red-500' : status === 'yellow' ? 'bg-yellow-500' : 'bg-green-500'
-                                )}>
-                                  <div className="w-1.5 h-1.5 bg-white rounded-full animate-pulse"></div>
-                                  {p.name}
+                                <div key={p.id} className="relative group/calItem">
+                                  <div className={cn(
+                                     "text-[9px] text-white font-black p-2 rounded-xl shadow-lg shadow-white/50 truncate flex items-center gap-2 cursor-help",
+                                     status === 'red' ? 'bg-red-500' : status === 'yellow' ? 'bg-yellow-500' : 'bg-green-500'
+                                  )}>
+                                    <div className="w-1.5 h-1.5 bg-white rounded-full animate-pulse flex-shrink-0"></div>
+                                    <span className="truncate">{p.name}</span>
+                                  </div>
+                                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover/calItem:block z-[60]">
+                                     <div className="bg-secondary-900 text-white p-3 rounded-xl shadow-2xl border border-white/10 flex flex-col gap-1 min-w-[180px]">
+                                        <p className="text-[10px] font-black uppercase tracking-widest leading-tight">{p.name}</p>
+                                        <div className="flex items-center gap-2 mt-1">
+                                           <span className="text-[9px] font-bold text-primary-400 bg-primary-900/50 px-2 py-0.5 rounded border border-primary-500/30 uppercase tracking-widest font-mono">
+                                             {p.assetId}
+                                           </span>
+                                           <span className="text-[10px] font-medium text-gray-300 truncate">
+                                             {asset?.name || 'Aparato desconocido'}
+                                           </span>
+                                        </div>
+                                     </div>
+                                  </div>
                                 </div>
                               );
                             })}
@@ -442,17 +525,18 @@ export function PreventivePage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {plans.map(plan => (
+                    {plans.map(plan => {
+                      const asset = assets.find(a => a.tag === plan.assetId);
+                      return (
                       <tr key={plan.id} className="hover:bg-primary-50/20 transition-colors group">
                         <td className="p-6 sticky left-0 bg-white group-hover:bg-primary-50/20 z-10 border-r border-gray-50">
                            <p className="text-xs font-black text-gray-900 line-clamp-1">{plan.name}</p>
                            <p className="text-[9px] font-bold text-primary-600 mt-1 uppercase tracking-tighter">{plan.assetId}</p>
                         </td>
                         {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map(monthIdx => {
-                          // Lógica para marcar meses de intervención (ejemplo simplificado basado en el intervalo de meses)
                           const hasTask = plan.type === 'uso' 
-                            ? (monthIdx % 2 === 0) // Simulación para uso
-                            : (monthIdx % (plan.intervalDays > 30 ? 3 : 1) === 0); // Simulación para tiempo
+                            ? (monthIdx % 2 === 0) 
+                            : (monthIdx % (plan.intervalDays > 30 ? 3 : 1) === 0);
                           
                           return (
                             <td key={monthIdx} className="p-4 border-l border-gray-50">
@@ -465,8 +549,16 @@ export function PreventivePage() {
                                       )} />
                                       {/* Tooltip Industrial */}
                                       <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover/dot:block z-50">
-                                         <div className="bg-secondary-900 text-white text-[9px] p-2 rounded-lg shadow-xl whitespace-nowrap border border-white/10 font-bold uppercase tracking-widest">
-                                            Ejecución Estimada
+                                         <div className="bg-secondary-900 text-white p-3 rounded-xl shadow-2xl border border-white/10 flex flex-col gap-1 min-w-[180px]">
+                                            <p className="text-[10px] font-black uppercase tracking-widest leading-tight">{plan.name}</p>
+                                            <div className="flex items-center gap-2 mt-1">
+                                               <span className="text-[9px] font-bold text-primary-400 bg-primary-900/50 px-2 py-0.5 rounded border border-primary-500/30 uppercase tracking-widest font-mono">
+                                                 {plan.assetId}
+                                               </span>
+                                               <span className="text-[10px] font-medium text-gray-300 truncate">
+                                                 {asset?.name || 'Aparato desconocido'}
+                                               </span>
+                                            </div>
                                          </div>
                                       </div>
                                     </div>
@@ -478,7 +570,7 @@ export function PreventivePage() {
                           );
                         })}
                       </tr>
-                    ))}
+                    )})}
                   </tbody>
                 </table>
               </div>
@@ -584,6 +676,58 @@ export function PreventivePage() {
                            </button>
                         </div>
                      </div>
+
+                     <div>
+                        <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-3 flex items-center gap-2">
+                          <Package className="w-4 h-4 text-secondary-500" /> Refacciones Necesarias (BOM)
+                        </label>
+                        <div className="bg-gray-50 p-4 rounded-2xl border border-gray-100 space-y-3">
+                           <div className="flex gap-2">
+                              <select 
+                                className="flex-1 bg-white border-2 border-transparent focus:border-primary-500 rounded-xl p-3 text-sm font-bold shadow-sm outline-none"
+                                value={selectedPartId}
+                                onChange={e => setSelectedPartId(e.target.value)}
+                              >
+                                 <option value="">Seleccione refacción...</option>
+                                 {inventoryItems.map(p => <option key={p.id} value={p.id}>{p.code} - {p.name}</option>)}
+                              </select>
+                              <input 
+                                type="number" 
+                                min="1"
+                                className="w-20 bg-white border-2 border-transparent focus:border-primary-500 rounded-xl p-3 text-sm font-bold shadow-sm outline-none text-center"
+                                value={selectedPartQty}
+                                onChange={e => setSelectedPartQty(e.target.value)}
+                              />
+                              <button 
+                                type="button"
+                                onClick={handleAddPart}
+                                className="bg-primary-600 text-white p-3 rounded-xl shadow-lg shadow-primary-100 hover:scale-105 active:scale-95 transition-all"
+                              >
+                                <Plus className="w-5 h-5" />
+                              </button>
+                           </div>
+                           
+                           {newPlan.requiredParts?.length > 0 && (
+                             <div className="space-y-2 mt-4 max-h-[150px] overflow-y-auto custom-scrollbar">
+                               {newPlan.requiredParts.map((rp, idx) => (
+                                 <div key={idx} className="flex items-center justify-between p-3 bg-white rounded-xl border border-gray-100 shadow-sm">
+                                    <div className="flex flex-col">
+                                       <span className="text-xs font-bold text-gray-700">{rp.name}</span>
+                                       <span className="text-[10px] text-gray-400">Cantidad: {rp.qty}</span>
+                                    </div>
+                                    <button 
+                                      type="button"
+                                      onClick={() => setNewPlan({...newPlan, requiredParts: newPlan.requiredParts.filter((_, i) => i !== idx)})}
+                                      className="text-gray-300 hover:text-red-500 transition-colors"
+                                    >
+                                      <Plus className="w-4 h-4 rotate-45" />
+                                    </button>
+                                 </div>
+                               ))}
+                             </div>
+                           )}
+                        </div>
+                     </div>
                   </div>
 
                   {/* Right Column: Execution Checklist */}
@@ -654,8 +798,118 @@ export function PreventivePage() {
                >
                  Protocolizar Plan Maestro
                </button>
-            </div>
+             </div>
           </form>
+        </div>
+      )}
+
+      {/* EDIT PARTS MODAL */}
+      {editingPlanParts && (
+        <div className="fixed inset-0 bg-secondary-900/80 backdrop-blur-xl z-[80] flex items-center justify-center p-4">
+          <div className="bg-white rounded-[2.5rem] shadow-2xl max-w-lg w-full overflow-hidden flex flex-col animate-in zoom-in-95 duration-200">
+            <div className="p-8 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
+               <div className="flex items-center gap-4">
+                  <div className="p-4 bg-primary-600 rounded-2xl shadow-lg shadow-primary-200">
+                    <Package className="w-6 h-6 text-white" />
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-black text-gray-900 tracking-tight">Editar Refacciones</h3>
+                    <p className="text-gray-500 font-bold uppercase tracking-widest text-[10px] mt-1">
+                      {plans.find(p => p.id === editingPlanParts.planId)?.name}
+                    </p>
+                  </div>
+               </div>
+               <button type="button" onClick={() => setEditingPlanParts(null)} className="bg-white p-3 rounded-xl shadow-sm border border-gray-100 text-gray-400 hover:text-gray-900 transition-all hover:rotate-90">
+                 <Plus className="w-5 h-5 rotate-45" />
+               </button>
+            </div>
+
+            <div className="p-8 bg-gray-50">
+               <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-3">Agregar Refacción (BOM)</label>
+               <div className="flex gap-2 mb-6">
+                  <select 
+                    className="flex-1 bg-white border-2 border-transparent focus:border-primary-500 rounded-xl p-3 text-sm font-bold shadow-sm outline-none"
+                    value={editPartId}
+                    onChange={e => setEditPartId(e.target.value)}
+                  >
+                     <option value="">Seleccione refacción...</option>
+                     {inventoryItems.map(p => <option key={p.id} value={p.id}>{p.code} - {p.name}</option>)}
+                  </select>
+                  <input 
+                    type="number" 
+                    min="1"
+                    className="w-20 bg-white border-2 border-transparent focus:border-primary-500 rounded-xl p-3 text-sm font-bold shadow-sm outline-none text-center"
+                    value={editPartQty}
+                    onChange={e => setEditPartQty(e.target.value)}
+                  />
+                  <button 
+                    type="button"
+                    onClick={() => {
+                      if (editPartId && editPartQty > 0) {
+                        const part = inventoryItems.find(p => p.id === editPartId);
+                        if (part) {
+                          setEditingPlanParts({
+                            ...editingPlanParts,
+                            parts: [...editingPlanParts.parts, { id: part.id, name: part.name, qty: parseInt(editPartQty) }]
+                          });
+                          setEditPartId('');
+                          setEditPartQty(1);
+                        }
+                      }
+                    }}
+                    className="bg-primary-600 text-white p-3 rounded-xl shadow-lg shadow-primary-100 hover:scale-105 active:scale-95 transition-all"
+                  >
+                    <Plus className="w-5 h-5" />
+                  </button>
+               </div>
+               
+               <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-3">Lista de Refacciones Actual</label>
+               <div className="space-y-2 max-h-[250px] overflow-y-auto custom-scrollbar">
+                 {editingPlanParts.parts.length > 0 ? editingPlanParts.parts.map((rp, idx) => (
+                   <div key={idx} className="flex items-center justify-between p-4 bg-white rounded-xl border border-gray-100 shadow-sm">
+                      <div className="flex flex-col">
+                         <span className="text-sm font-bold text-gray-700">{rp.name}</span>
+                         <span className="text-[10px] text-gray-400 font-bold">CANTIDAD: {rp.qty}</span>
+                      </div>
+                      <button 
+                        type="button"
+                        onClick={() => setEditingPlanParts({
+                          ...editingPlanParts,
+                          parts: editingPlanParts.parts.filter((_, i) => i !== idx)
+                        })}
+                        className="p-2 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                      >
+                        <Plus className="w-5 h-5 rotate-45" />
+                      </button>
+                   </div>
+                 )) : (
+                   <div className="py-8 text-center text-[10px] font-bold text-gray-400 italic">
+                     No hay refacciones asignadas
+                   </div>
+                 )}
+               </div>
+            </div>
+
+            <div className="p-8 bg-white border-t border-gray-100 flex gap-4">
+               <button 
+                 type="button" 
+                 onClick={() => setEditingPlanParts(null)}
+                 className="flex-1 py-4 text-gray-600 font-black uppercase tracking-widest text-[10px] bg-gray-50 hover:bg-gray-100 rounded-2xl transition-all"
+               >
+                 Cancelar
+               </button>
+               <button 
+                 type="button"
+                 onClick={() => {
+                   updatePlan(editingPlanParts.planId, { requiredParts: editingPlanParts.parts });
+                   setEditingPlanParts(null);
+                 }}
+                 className="flex-[2] py-4 bg-primary-600 text-white font-black uppercase tracking-widest text-[10px] rounded-2xl shadow-xl shadow-primary-200 hover:bg-primary-700 active:scale-95 transition-all"
+               >
+                 Guardar Cambios
+               </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

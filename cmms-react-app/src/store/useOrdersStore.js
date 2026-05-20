@@ -22,6 +22,7 @@ export const useOrdersStore = create((set, get) => ({
         id: item.id,
         folio: item.folio,
         title: item.title,
+        description: item.description,
         priority: item.priority,
         status: item.status,
         assetTag: item.asset_tag,
@@ -62,16 +63,20 @@ export const useOrdersStore = create((set, get) => ({
       const dueDate = new Date(Date.now() + 3600000 * hours).toISOString();
       const createdAt = new Date().toISOString();
 
+      // Find asset area to match
+      const assetArea = newOrder.area || 'Producción';
+
       const dbOrder = {
         folio,
         title: newOrder.title,
+        description: newOrder.description,
         priority: newOrder.priority,
         status: 'abierta',
         asset_tag: newOrder.assetTag,
         created_at: createdAt,
         due_date: dueDate,
         type: newOrder.type,
-        area: newOrder.area,
+        area: assetArea,
         created_by: newOrder.createdBy || 'Sistema',
         checklist: newOrder.checklist || [],
         failure_cause: newOrder.failureCause || null,
@@ -88,6 +93,32 @@ export const useOrdersStore = create((set, get) => ({
       await get().fetchOrders();
     } catch (err) {
       console.error('Error creating order:', err);
+      set({ error: err.message, loading: false });
+    }
+  },
+
+  updateOrder: async (id, updatedFields) => {
+    set({ loading: true });
+    try {
+      const dbUpdates = {
+        title: updatedFields.title,
+        description: updatedFields.description,
+        priority: updatedFields.priority,
+        type: updatedFields.type,
+        area: updatedFields.area,
+        asset_tag: updatedFields.assetTag
+      };
+
+      const { error } = await supabase
+        .from('work_orders')
+        .update(dbUpdates)
+        .eq('id', id);
+
+      if (error) throw error;
+
+      await get().fetchOrders();
+    } catch (err) {
+      console.error('Error updating order:', err);
       set({ error: err.message, loading: false });
     }
   },
@@ -115,6 +146,7 @@ export const useOrdersStore = create((set, get) => ({
       await get().fetchOrders();
     } catch (err) {
       console.error('Error updating order status:', err);
+      alert('Error al actualizar el estado: ' + err.message + '\n\nAsegúrate de que el estado esté permitido en la base de datos (Ej: falta actualizar el CONSTRAINT de status en Supabase para permitir "en_espera").');
       set({ error: err.message, loading: false });
     }
   },

@@ -6,7 +6,7 @@ import { useAssetsStore } from '../../store/useAssetsStore';
 import { 
   ArrowLeft, Play, CheckCircle, Clock, AlertTriangle, ShieldCheck, 
   DollarSign, Timer, CheckSquare, Square, ClipboardList, LightbulbIcon,
-  Activity, FileText
+  Activity, FileText, Pencil
 } from 'lucide-react';
 import { generateOrderPDF } from '../../lib/pdfGenerator';
 
@@ -30,6 +30,17 @@ export function OrderDetailsPage() {
   const [failureCause, setFailureCause] = useState('');
   const [localChecklist, setLocalChecklist] = useState(order?.checklist || []);
 
+  // Form states for Edit Mode
+  const [isEditing, setIsEditing] = useState(false);
+  const [editForm, setEditForm] = useState({
+    title: '',
+    description: '',
+    priority: 'P3',
+    type: 'preventivo',
+    area: 'Producción',
+    assetTag: 'BMB-01'
+  });
+
   if (!order) return <div className="p-8 text-center">Orden no encontrada</div>;
 
   const isOverdue = order.status !== 'cerrada' && new Date(order.dueDate) < new Date();
@@ -38,20 +49,31 @@ export function OrderDetailsPage() {
 
   useEffect(() => {
     if (order.checklist) setLocalChecklist(order.checklist);
+    if (order) {
+      setEditForm({
+        title: order.title || '',
+        description: order.description || '',
+        priority: order.priority || 'P3',
+        type: order.type || 'preventivo',
+        area: order.area || 'Producción',
+        assetTag: order.assetTag || 'BMB-01'
+      });
+    }
   }, [order]);
 
   const handleAdvance = () => {
-    const idx = STATUS_FLOW.indexOf(order.status);
-    const nextStatus = STATUS_FLOW[idx + 1];
-
-    if (nextStatus === 'cerrada') {
+    if (order.status === 'abierta') {
+      updateStatus(id, 'asignada');
+    } else if (order.status === 'asignada') {
+      updateStatus(id, 'en_proceso');
+    } else if (order.status === 'en_proceso') {
       // Validar checklist si es preventivo
       if (order.type === 'preventivo' && localChecklist.some(item => !item.completed)) {
         return alert('Debes completar todos los puntos del checklist obligatorio antes de cerrar.');
       }
       setShowClosureForm(true);
-    } else if (idx < STATUS_FLOW.length - 1) {
-      updateStatus(id, nextStatus);
+    } else if (order.status === 'en_espera') {
+      updateStatus(id, 'en_proceso');
     }
   };
 
@@ -109,11 +131,22 @@ export function OrderDetailsPage() {
         
         {/* SLA Countdown indicator (Mock logic) */}
         {!order.closure ? (
-          <div className={`flex items-center gap-2 px-4 py-2 rounded-lg border-2 ${isOverdue ? 'border-red-500 bg-red-50 text-red-700' : 'border-green-500 bg-green-50 text-green-700'}`}>
-            <Clock className="w-5 h-5" />
-            <div className="text-right">
-              <p className="text-[10px] font-bold uppercase tracking-widest">{isOverdue ? 'SLA VENCIDO' : 'DENTRO DE SLA'}</p>
-              <p className="text-sm font-black">{new Date(order.dueDate).toLocaleString()}</p>
+          <div className="flex items-center gap-3">
+            {user?.role !== 'tecnico' && (
+              <button 
+                onClick={() => setIsEditing(true)}
+                className="flex items-center gap-2 px-4 py-2 border-2 border-gray-200 text-gray-700 bg-white hover:bg-gray-50 rounded-xl font-bold transition-all shadow-sm active:scale-95 text-sm"
+              >
+                <Pencil className="w-4 h-4 text-primary-500" />
+                Editar
+              </button>
+            )}
+            <div className={`flex items-center gap-2 px-4 py-2 rounded-lg border-2 ${isOverdue ? 'border-red-500 bg-red-50 text-red-700' : 'border-green-500 bg-green-50 text-green-700'}`}>
+              <Clock className="w-5 h-5" />
+              <div className="text-right">
+                <p className="text-[10px] font-bold uppercase tracking-widest">{isOverdue ? 'SLA VENCIDO' : 'DENTRO DE SLA'}</p>
+                <p className="text-sm font-black">{new Date(order.dueDate).toLocaleString()}</p>
+              </div>
             </div>
           </div>
         ) : (
@@ -383,6 +416,133 @@ export function OrderDetailsPage() {
           </div>
         </div>
       </div>
+
+      {/* EDIT MODAL */}
+      {isEditing && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-8 shadow-2xl border border-gray-100 animate-in zoom-in-95 duration-150 text-left">
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-lg font-black text-gray-900 flex items-center gap-2">
+                <Pencil className="w-5 h-5 text-primary-600" />
+                Editar Orden de Trabajo
+              </h3>
+              <button 
+                type="button" 
+                onClick={() => setIsEditing(false)} 
+                className="text-gray-400 hover:text-black font-bold p-1 rounded-lg"
+              >
+                ✖
+              </button>
+            </div>
+
+            <form onSubmit={async (e) => {
+              e.preventDefault();
+              await useOrdersStore.getState().updateOrder(id, editForm);
+              setIsEditing(false);
+            }} className="space-y-5">
+              <div>
+                <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Título de la Orden</label>
+                <input 
+                  type="text" 
+                  required
+                  className="w-full border-2 border-gray-100 rounded-xl p-3 outline-none focus:border-primary-500 font-bold"
+                  value={editForm.title}
+                  onChange={e => setEditForm({...editForm, title: e.target.value})}
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Descripción / Reporte de Falla</label>
+                <textarea 
+                  required
+                  rows={4}
+                  className="w-full border-2 border-gray-100 rounded-xl p-3 outline-none focus:border-primary-500 font-medium text-sm resize-none"
+                  value={editForm.description}
+                  onChange={e => setEditForm({...editForm, description: e.target.value})}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Prioridad</label>
+                  <select 
+                    className="w-full border-2 border-gray-100 rounded-xl p-3 outline-none focus:border-primary-500 font-bold bg-white"
+                    value={editForm.priority}
+                    onChange={e => setEditForm({...editForm, priority: e.target.value})}
+                  >
+                    <option value="P1">P1 - Crítico</option>
+                    <option value="P2">P2 - Alto</option>
+                    <option value="P3">P3 - Medio</option>
+                    <option value="P4">P4 - Bajo</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Tipo de Trabajo</label>
+                  <select 
+                    className="w-full border-2 border-gray-100 rounded-xl p-3 outline-none focus:border-primary-500 font-bold bg-white"
+                    value={editForm.type}
+                    onChange={e => setEditForm({...editForm, type: e.target.value})}
+                  >
+                    <option value="preventivo">Preventivo</option>
+                    <option value="correctivo">Correctivo</option>
+                    <option value="predictivo">Predictivo</option>
+                    <option value="emergencia">Emergencia</option>
+                    <option value="mejora">Mejora</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Área</label>
+                  <select 
+                    className="w-full border-2 border-gray-100 rounded-xl p-3 outline-none focus:border-primary-500 font-bold bg-white"
+                    value={editForm.area}
+                    onChange={e => setEditForm({...editForm, area: e.target.value})}
+                  >
+                    <option value="Producción">Producción</option>
+                    <option value="Servicios">Servicios</option>
+                    <option value="Maquinado">Maquinado</option>
+                    <option value="Fabricación">Fabricación</option>
+                    <option value="Eléctrico">Eléctrico</option>
+                    <option value="Almacén">Almacén</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Equipo (Tag)</label>
+                  <select 
+                    className="w-full border-2 border-gray-100 rounded-xl p-3 outline-none focus:border-primary-500 font-bold bg-white"
+                    value={editForm.assetTag}
+                    onChange={e => setEditForm({...editForm, assetTag: e.target.value})}
+                  >
+                    {assets.map(a => (
+                      <option key={a.tag} value={a.tag}>{a.tag} — {a.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex gap-3 pt-4">
+                <button 
+                  type="button" 
+                  onClick={() => setIsEditing(false)}
+                  className="flex-1 py-3 text-gray-600 bg-gray-50 hover:bg-gray-100 font-bold rounded-xl transition-all text-sm"
+                >
+                  Cancelar
+                </button>
+                <button 
+                  type="submit" 
+                  className="flex-1 py-3 bg-primary-600 hover:bg-primary-700 text-white font-bold rounded-xl transition-all text-sm shadow-md"
+                >
+                  Guardar Cambios
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

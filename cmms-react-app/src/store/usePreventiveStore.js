@@ -70,6 +70,26 @@ export const usePreventiveStore = create((set, get) => ({
     }
   },
 
+  updatePlan: async (planId, updates) => {
+    set({ loading: true });
+    try {
+      const dbUpdates = {};
+      if (updates.requiredParts !== undefined) dbUpdates.required_parts = updates.requiredParts;
+
+      const { error } = await supabase
+        .from('preventive_maintenance')
+        .update(dbUpdates)
+        .eq('id', planId);
+
+      if (error) throw error;
+
+      await get().fetchPlans();
+    } catch (err) {
+      console.error('Error updating plan:', err);
+      set({ error: err.message, loading: false });
+    }
+  },
+
   executePlan: async (planId) => {
     set({ loading: true });
     try {
